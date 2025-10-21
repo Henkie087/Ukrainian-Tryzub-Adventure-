@@ -1,0 +1,938 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ukrainian Platformer Adventure</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden; /* Hide scrollbars */
+            background-color: #87CEEB; /* Light blue sky */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            font-family: 'Arial', sans-serif;
+        }
+        canvas {
+            background-color: #87CEEB;
+            border: 2px solid #555;
+            display: block;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+        }
+        #gameInfo, #livesInfo, #levelInfo {
+            position: absolute;
+            color: #333;
+            font-size: 24px;
+            font-weight: bold;
+            background-color: rgba(255, 255, 255, 0.8);
+            padding: 5px 10px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            z-index: 10;
+        }
+        #gameInfo { top: 10px; left: 10px; }
+        #livesInfo { top: 10px; right: 10px; }
+        #levelInfo { top: 10px; left: 50%; transform: translateX(-50%); }
+
+        .controls-info {
+            position: absolute;
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #333;
+            background-color: rgba(255, 255, 255, 0.7);
+            padding: 5px 15px;
+            border-radius: 5px;
+            font-size: 16px;
+            z-index: 10;
+        }
+        #messageOverlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.7);
+            display: none;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            text-align: center;
+            font-size: 30px;
+            z-index: 20;
+        }
+        #messageOverlay button {
+            padding: 10px 20px;
+            font-size: 24px;
+            margin-top: 20px;
+            cursor: pointer;
+            border: none;
+            border-radius: 5px;
+            background-color: #FFD700; /* Yellow */
+            color: #333;
+            font-weight: bold;
+            transition: background-color 0.2s;
+        }
+        #messageOverlay button:hover {
+            background-color: #FFA500; /* Orange */
+        }
+        #finalScore {
+            font-size: 40px;
+            margin-bottom: 20px;
+            color: #4169E1; /* Blue */
+        }
+        #gameOverTitle {
+            font-size: 48px;
+            margin-bottom: 10px;
+            color: #FF6347; /* Tomato Red */
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas" width="960" height="540"></canvas>
+    
+    <!-- Updated UI to show collected / goal -->
+    <div id="gameInfo">Tryzub: 0 (0/0)</div> 
+    <div id="livesInfo">Lives: 3</div>
+    <div id="levelInfo">Level: 1</div>
+    
+    <div id="messageOverlay">
+        <h1 id="overlayTitle"></h1>
+        <p id="overlayMessage"></p>
+        <div id="finalScore"></div>
+        <button id="overlayButton">Start Game (A/D/Space)</button>
+    </div>
+    <div class="controls-info">Controls: A/D to move, Space to jump (double jump available!)</div>
+
+    <script>
+        // Start IIFE for safe variable scoping
+        (function() { 
+            const canvas = document.getElementById('gameCanvas');
+            const ctx = canvas.getContext('2d');
+            const gameInfo = document.getElementById('gameInfo');
+            const livesInfo = document.getElementById('livesInfo');
+            const levelInfo = document.getElementById('levelInfo');
+            const messageOverlay = document.getElementById('messageOverlay');
+            const overlayTitle = document.getElementById('overlayTitle');
+            const overlayMessage = document.getElementById('overlayMessage');
+            const finalScoreDisplay = document.getElementById('finalScore');
+            const overlayButton = document.getElementById('overlayButton');
+
+            // --- Game Settings and State ---
+            const maxLevels = 20;
+            const gravity = 0.5;
+            const jumpStrength = -13;
+            const playerSpeed = 5;
+            const maxLives = 3;
+            const groundY = canvas.height - 50;
+            const INVULNERABILITY_FRAMES = 60; 
+            
+            let gameState = {
+                currentLevel: 1,
+                totalTryzubs: 0, 
+                collectedInLevel: 0,
+                levelGoal: 0,
+                lives: maxLives,
+                isTransitioning: false,
+                isGameOver: false,
+                gameStarted: false,
+                isInvulnerable: false,
+                invulnerabilityTimer: 0 
+            };
+
+            let animationFrameId;
+
+            const player = {
+                x: 50,
+                y: groundY - 50,
+                width: 30,
+                height: 50,
+                velX: 0,
+                velY: 0,
+                onGround: false,
+                jumpsRemaining: 2
+            };
+            
+            // Background elements
+            const clouds = [
+                { x: 100, y: 70, speed: 0.3, sizeX: 60, sizeY: 30 },
+                { x: 450, y: 120, speed: 0.25, sizeX: 80, sizeY: 40 },
+                { x: 750, y: 50, speed: 0.35, sizeX: 70, sizeY: 35 },
+            ];
+
+            const birds = [
+                { x: 10, y: 100, velX: 1.0, amplitude: 5, frequency: 0.05, offset: 0 },
+                { x: 200, y: 120, velX: 0.8, amplitude: 7, frequency: 0.04, offset: Math.PI / 2 },
+                { x: 500, y: 80, velX: 1.2, amplitude: 6, frequency: 0.06, offset: Math.PI },
+            ];
+
+            const sunflowers = [
+                { x: 70, y: groundY - 40, scale: 1.0 },
+                { x: 280, y: groundY - 50, scale: 1.2 },
+                { x: 450, y: groundY - 45, scale: 0.9 },
+                { x: 680, y: groundY - 55, scale: 1.1 }
+            ];
+
+            const houses = [
+                { x: 50, y: groundY - 100, width: 80, height: 100, color: '#8B4513', roofColor: '#FF4500' },
+                { x: 250, y: groundY - 70, width: 60, height: 70, color: '#F0E68C', roofColor: '#B22222' },
+                { x: 800, y: groundY - 130, width: 90, height: 130, color: '#87CEFA', roofColor: '#696969' }
+            ];
+
+            // --- Level Data Helpers ---
+            const T = (x, y) => ({ x, y, size: 15, type: 'tryzub' });
+            const H = (x, y) => ({ x, y, size: 20, type: 'heart' });
+            const Z = (x, y, w, h) => ({ x, y, width: w, height: h, type: 'hazard' });
+            const M = (x, y, w, h, range) => ({ 
+                x, y, width: w, height: h, type: 'moving_hazard', 
+                startY: y, moveRange: range, velY: -1, 
+            });
+            const P = (x, y, w, h, range) => ({ 
+                x, y, width: w, height: h, type: 'patrol_hazard', 
+                startX: x, moveRange: range, velX: 2, 
+            });
+
+            // --- Level Definitions (Platforms, Tryzub, Hazards, Hearts) ---
+            const levelData = [];
+
+            // Level 1: Ground Focus 
+            levelData[1] = {
+                goal: 4, 
+                platforms: [
+                    { x: 0, y: groundY, width: canvas.width, height: 50, color: '#DAA520' }, // Ground
+                    { x: 150, y: groundY - 100, width: 100, height: 20, color: '#DAA520' }, 
+                    { x: 300, y: groundY - 200, width: 120, height: 20, color: '#DAA520' },
+                    { x: 500, y: groundY - 100, width: 100, height: 20, color: '#DAA520' },
+                ],
+                collectibles: [
+                    T(170, groundY - 120), T(340, groundY - 220), T(530, groundY - 120), 
+                    T(460, groundY - 65), 
+                    T(700, groundY - 65), 
+                    T(60, groundY - 280), 
+                    H(800, groundY - 250)
+                ],
+                hazards: [
+                    Z(450, groundY - 15, 50, 15), 
+                    M(100, groundY - 15, 50, 15, 10)
+                ]
+            };
+            
+            // Level 2: Patrol Focus
+            levelData[2] = {
+                goal: 5, 
+                platforms: [
+                    { x: 0, y: groundY, width: canvas.width, height: 50, color: '#DAA520' }, // Ground
+                    { x: 50, y: groundY - 100, width: 70, height: 20, color: '#DAA520' }, 
+                    { x: 200, y: groundY - 200, width: 150, height: 20, color: '#DAA520' },
+                    { x: 450, y: groundY - 300, width: 100, height: 20, color: '#DAA520' },
+                    { x: 700, y: groundY - 200, width: 150, height: 20, color: '#DAA520' }, // Upper Right Platform
+                ],
+                collectibles: [
+                    T(50, groundY - 120), T(230, groundY - 220), T(480, groundY - 320), T(750, groundY - 220), 
+                    T(150, groundY - 65), 
+                    T(400, groundY - 65), 
+                    T(700, groundY - 65), 
+                    H(500, groundY - 400)
+                ],
+                hazards: [
+                    M(150, groundY - 15, 50, 15, 10), 
+                    P(500, groundY - 50, 30, 50, 250) 
+                ]
+            };
+
+            // Level 3: Dual Ground Threat
+            levelData[3] = {
+                goal: 4, 
+                platforms: [
+                    { x: 0, y: groundY, width: canvas.width, height: 50, color: '#DAA520' }, 
+                    { x: 50, y: groundY - 150, width: 150, height: 20, color: '#DAA520' }, 
+                    { x: 750, y: groundY - 150, width: 150, height: 20, color: '#DAA520' }, 
+                    { x: 350, y: groundY - 250, width: 250, height: 20, color: '#DAA520' },
+                ],
+                collectibles: [
+                    T(100, groundY - 170), T(800, groundY - 170), 
+                    T(470, groundY - 270), 
+                    T(250, groundY - 65), 
+                    T(650, groundY - 65), 
+                    H(850, groundY - 250)
+                ],
+                hazards: [
+                    P(50, groundY - 50, 30, 50, 150), 
+                    Z(350, groundY - 15, 50, 15), 
+                    P(700, groundY - 50, 30, 50, 150),
+                    P(400, groundY - 250 - 50, 30, 50, 100) // Patrol on mid platform
+                ]
+            };
+
+            // Dynamic Level Generation (4-20)
+            for (let i = 4; i <= maxLevels; i++) {
+                const numPlatforms = Math.min(i + 3, 8);
+                const totalCollectibles = Math.floor(i * 1.5);
+                const goalTryzubCount = Math.min(Math.floor(i / 2) + 4, 10); 
+                const numHazards = Math.floor(i / 3) + 2; 
+                
+                const platforms = [
+                    { x: 0, y: groundY, width: canvas.width, height: 50, color: '#DAA520' },
+                ];
+                const collectibles = [];
+                const hazards = [];
+                
+                let currentY = groundY - 100;
+                let lastPlatformEnd = 50; 
+                const minPlatformGap = 100; 
+
+                // 1. Platform Generation
+                for (let j = 0; j < numPlatforms; j++) {
+                    const width = Math.random() * 50 + 50;
+                    const height = 20;
+                    
+                    if (j % 2 === 0) {
+                        currentY = currentY - (Math.random() * 80 + 20);
+                    } else {
+                        currentY = currentY + (Math.random() * 100 - 50);
+                    }
+
+                    currentY = Math.min(Math.max(currentY, groundY - 450), groundY - 100);
+                    
+                    let nextX = lastPlatformEnd + minPlatformGap + Math.random() * 50; 
+
+                    if (nextX + width > canvas.width - 50) {
+                        nextX = 50; 
+                        currentY = groundY - 150 - Math.random() * 150;
+                        currentY = Math.min(currentY, groundY - 100); 
+                    }
+                    
+                    const newPlatform = { x: nextX, y: currentY, width, height, color: '#DAA520' };
+                    platforms.push(newPlatform);
+                    lastPlatformEnd = newPlatform.x + newPlatform.width; 
+                }
+
+                const allPlatforms = platforms.slice(1);
+                
+                // 2. Collectible Generation
+                for (let j = 0; j < allPlatforms.length; j++) {
+                    const p = allPlatforms[j];
+                    collectibles.push(T(p.x + p.width/2 - 7.5, p.y - 30));
+                }
+                
+                const remainingTryzubs = totalCollectibles - allPlatforms.length;
+                for (let j = 0; j < remainingTryzubs; j++) {
+                    const x = 50 + Math.random() * (canvas.width - 100);
+                    collectibles.push(T(x, groundY - 65)); 
+                }
+
+                if (i % 5 === 0) {
+                     collectibles.push(H(allPlatforms[allPlatforms.length - 1].x, allPlatforms[allPlatforms.length - 1].y - 50));
+                }
+
+                // 3. Hazard Generation (Aggressively placed hazards)
+                for (let j = 0; j < numHazards; j++) {
+                    const baseRange = 100 + (i * 5); 
+                    
+                    let hazardType = j % 3; // 0: Moving, 1: Spikes, 2: Patrol
+
+                    let hazardX, hazardY, platformWidth = 0;
+                    let targetPlatform = null;
+
+                    // 50% chance of being on an elevated platform (if one exists)
+                    if (Math.random() < 0.5 && allPlatforms.length > 0) {
+                        targetPlatform = allPlatforms[Math.floor(Math.random() * allPlatforms.length)];
+                        
+                        // Place hazard on top of the selected platform
+                        platformWidth = targetPlatform.width;
+                        const xOffset = targetPlatform.width * 0.1;
+                        hazardX = targetPlatform.x + xOffset + Math.random() * (targetPlatform.width - 50 - 2 * xOffset);
+                        
+                        if (hazardType === 0 || hazardType === 1) {
+                            // Spikes/Movers are 15px tall, placed on the platform surface
+                            hazardY = targetPlatform.y - 15; 
+                            hazardX = targetPlatform.x + targetPlatform.width * 0.1 + Math.random() * (targetPlatform.width * 0.8 - 50);
+                        } else {
+                            // Patrol enemies are 50px tall, placed on the platform surface
+                            hazardY = targetPlatform.y - 50; 
+                        }
+                        
+                    } else {
+                        // Place hazard on the ground
+                        hazardX = 50 + Math.random() * (canvas.width - 100);
+                        hazardY = groundY - (hazardType === 2 ? 50 : 15);
+                    }
+
+                    if (hazardType === 0) {
+                        // Moving spike (Mover)
+                        hazards.push(M(hazardX, groundY - 15, 50, 15, 20)); 
+                    } else if (hazardType === 1) {
+                         // Static spike (Hazard)
+                         hazards.push(Z(hazardX, groundY - 15, 50, 15));
+                    } else {
+                        // Patrol hazard (Patrol enemies)
+                        const patrolRange = platformWidth > 0 ? platformWidth * 0.7 : baseRange;
+                        hazards.push(P(hazardX, hazardY, 30, 50, patrolRange));
+                    }
+                }
+
+                levelData[i] = { goal: goalTryzubCount, platforms, collectibles, hazards };
+            }
+            
+            // --- Drawing Functions ---
+            function drawPlayer() {
+                const px = player.x;
+                const py = player.y;
+                const pw = player.width;
+                const ph = player.height;
+                const center = px + pw / 2;
+                
+                let bodyColor = '#4169E1'; // Royal Blue
+                let headColor = '#FFD700'; // Gold
+                
+                // Invulnerability flashing effect (blink every 5 frames)
+                if (gameState.isInvulnerable && (gameState.invulnerabilityTimer % 10 < 5)) {
+                    // Swap colors for flashing effect
+                    bodyColor = '#FFD700';
+                    headColor = '#4169E1';
+                }
+
+                // 1. Hat (Dark Blue)
+                ctx.fillStyle = '#191970'; 
+                ctx.fillRect(px, py, pw, 5); 
+                ctx.fillRect(center - 10, py - 10, 20, 10); 
+
+                // 2. Head 
+                ctx.fillStyle = headColor; 
+                ctx.beginPath();
+                ctx.arc(center, py + 15, pw / 2, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Simple Eyes
+                ctx.fillStyle = '#000000';
+                ctx.fillRect(center - 8, py + 12, 3, 3);
+                ctx.fillRect(center + 5, py + 12, 3, 3);
+
+                // 3. Body 
+                ctx.fillStyle = bodyColor; 
+                ctx.fillRect(px, py + 30, pw, ph - 30);
+                
+                // 4. Arms 
+                ctx.fillStyle = '#A9A9A9'; 
+                ctx.fillRect(px - 5, py + 35, 5, 20); 
+                ctx.fillRect(px + pw, py + 35, 5, 20); 
+
+                // 5. Legs 
+                ctx.fillStyle = '#A9A9A9'; 
+                ctx.fillRect(center - 10, py + ph - 5, 5, 5); 
+                ctx.fillRect(center + 5, py + ph - 5, 5, 5);
+            }
+
+            function drawBird(bird) {
+                ctx.strokeStyle = '#333';
+                ctx.lineWidth = 2;
+                ctx.lineCap = 'round';
+                
+                const x = bird.x;
+                const y = bird.y;
+
+                ctx.beginPath();
+                ctx.moveTo(x - 15, y + 5);
+                ctx.lineTo(x - 5, y - 5);
+                ctx.lineTo(x, y + 5);
+                ctx.moveTo(x, y + 5);
+                ctx.lineTo(x + 5, y - 5);
+                ctx.lineTo(x + 15, y + 5);
+                ctx.stroke();
+            }
+
+            function drawCloud(cloud) {
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+                ctx.beginPath();
+                ctx.ellipse(cloud.x, cloud.y, cloud.sizeX, cloud.sizeY, 0, 0, Math.PI * 2);
+                ctx.ellipse(cloud.x + cloud.sizeX * 0.6, cloud.y - cloud.sizeY * 0.4, cloud.sizeX * 0.5, cloud.sizeY * 0.7, 0, 0, Math.PI * 2);
+                ctx.ellipse(cloud.x - cloud.sizeX * 0.5, cloud.y - cloud.sizeY * 0.3, cloud.sizeX * 0.4, cloud.sizeY * 0.6, 0, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            function drawSunflower(x, y, scale) {
+                const stemX = x;
+                const headSize = 15 * scale;
+                
+                ctx.fillStyle = '#006400';
+                ctx.fillRect(stemX - 2, y, 4, groundY - y);
+
+                ctx.fillStyle = '#FFD700'; 
+                for (let i = 0; i < 12; i++) {
+                    ctx.beginPath();
+                    ctx.ellipse(stemX + Math.cos(i * Math.PI / 6) * headSize,
+                                y - headSize * 0.5 + Math.sin(i * Math.PI / 6) * headSize,
+                                headSize * 0.7, headSize * 0.3, i * Math.PI / 6, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+                ctx.fillStyle = '#8B4513'; 
+                ctx.beginPath();
+                ctx.arc(stemX, y - headSize * 0.5, headSize * 0.4, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            function drawTryzub(tryzub) {
+                if (tryzub.collected) return;
+
+                const size = tryzub.size;
+                ctx.fillStyle = '#FFD700'; 
+                ctx.fillRect(tryzub.x, tryzub.y, size, size);
+                
+                // Blue Trident (Tryzub symbol)
+                ctx.fillStyle = '#4169E1'; 
+                const centerX = tryzub.x + size / 2;
+                const centerY = tryzub.y + size / 2;
+                const triSize = size * 0.7;
+                const stemWidth = triSize * 0.15;
+                
+                ctx.beginPath();
+                ctx.rect(centerX - triSize / 2, centerY - triSize / 2, stemWidth, triSize);
+                ctx.rect(centerX + triSize / 2 - stemWidth, centerY - triSize / 2, stemWidth, triSize);
+                ctx.rect(centerX - stemWidth / 2, centerY - triSize, stemWidth, triSize * 1.5);
+                ctx.rect(centerX - triSize / 2, centerY - triSize / 2, triSize, stemWidth);
+                ctx.fill();
+            }
+
+            function drawHeart(heart) {
+                if (heart.collected) return;
+                const x = heart.x;
+                const y = heart.y;
+                const size = heart.size;
+
+                ctx.fillStyle = 'red';
+                ctx.beginPath();
+                ctx.moveTo(x + size * 0.5, y + size * 0.3);
+                ctx.bezierCurveTo(x + size * 0.1, y, x, y + size * 0.4, x + size * 0.5, y + size * 0.9);
+                ctx.bezierCurveTo(x + size, y + size * 0.4, x + size * 0.9, y, x + size * 0.5, y + size * 0.3);
+                ctx.closePath();
+                ctx.fill();
+            }
+            
+            function drawHazard(hazard) {
+                if (hazard.type === 'patrol_hazard') {
+                    drawPatrolEnemy(hazard);
+                    return;
+                }
+
+                ctx.fillStyle = hazard.type === 'moving_hazard' ? '#FFA500' : '#FF0000'; 
+                
+                const x = hazard.x;
+                const y = hazard.y;
+                const w = hazard.width;
+                const h = hazard.height;
+                const numSpikes = 6;
+                
+                ctx.fillRect(x, y + h * 0.5, w, h * 0.5);
+
+                ctx.fillStyle = '#AAAAAA';
+                const spikeHeight = h * 0.7;
+                for (let i = 0; i < numSpikes; i++) {
+                    const spikeWidth = w / numSpikes;
+                    const spikeX = x + i * spikeWidth;
+                    ctx.beginPath();
+                    ctx.moveTo(spikeX, y + h); 
+                    ctx.lineTo(spikeX + spikeWidth / 2, y + h - spikeHeight); 
+                    ctx.lineTo(spikeX + spikeWidth, y + h); 
+                    ctx.closePath();
+                    ctx.fill();
+                }
+            }
+
+            function drawPatrolEnemy(hazard) {
+                const x = hazard.x;
+                const y = hazard.y;
+                const w = hazard.width;
+                const h = hazard.height;
+                const radius = w / 2;
+
+                ctx.fillStyle = '#8B0000'; 
+                ctx.beginPath();
+                ctx.arc(x + radius, y + h - radius, radius, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.fillStyle = '#000000';
+                ctx.fillRect(x + w * 0.2, y + h, 3, 5);
+                ctx.fillRect(x + w * 0.8 - 3, y + h, 3, 5);
+            }
+
+            // --- Game Logic ---
+
+            function updateGameInfo() {
+                const total = gameState.totalTryzubs;
+                const collected = gameState.collectedInLevel;
+                const goal = gameState.levelGoal;
+                gameInfo.textContent = `Tryzub: ${total} (${collected}/${goal})`;
+            }
+
+            /**
+             * Resets the entire game state to Level 1.
+             */
+            function resetGame() {
+                cancelAnimationFrame(animationFrameId);
+                
+                gameState.currentLevel = 1;
+                gameState.totalTryzubs = 0;
+                gameState.lives = maxLives;
+                gameState.isGameOver = false;
+                gameState.isTransitioning = false;
+                gameState.gameStarted = true;
+
+                updateGameInfo(); 
+                livesInfo.textContent = `Lives: ${maxLives}`;
+
+                loadLevel(1); 
+                messageOverlay.style.display = 'none';
+
+                gameLoop(); 
+            }
+            
+            // Utility function to set invulnerability
+            function setInvulnerable(durationFrames) {
+                gameState.isInvulnerable = true;
+                gameState.invulnerabilityTimer = durationFrames;
+            }
+
+
+            function loadLevel(levelIndex) {
+                if (levelIndex > maxLevels) {
+                    gameOver(true); 
+                    return;
+                }
+                
+                gameState.currentLevel = levelIndex;
+                
+                player.x = 50;
+                player.y = groundY - player.height; 
+                player.velX = 0;
+                player.velY = 0;
+                player.onGround = false;
+                player.jumpsRemaining = 2;
+
+                gameState.collectedInLevel = 0;
+                gameState.levelGoal = levelData[levelIndex].goal;
+                
+                // Deep copy level data and reset collected state
+                gameState.platforms = levelData[levelIndex].platforms;
+                gameState.collectibles = levelData[levelIndex].collectibles.map(c => ({...c, collected: false}));
+                gameState.hazards = levelData[levelIndex].hazards.map(h => ({...h, startX: h.startX || h.x, startY: h.startY || h.y, x: h.x, y: h.y}));
+                
+                levelInfo.textContent = `Level: ${levelIndex}`;
+                updateGameInfo();
+                gameState.isTransitioning = false;
+                
+                // New level starts with brief invulnerability
+                setInvulnerable(INVULNERABILITY_FRAMES);
+            }
+
+            function respawn() {
+                if (gameState.isInvulnerable) return; // Cannot die while invulnerable
+                
+                gameState.lives--;
+                livesInfo.textContent = `Lives: ${gameState.lives}`;
+                
+                if (gameState.lives <= 0) {
+                    gameOver(false);
+                    return;
+                }
+
+                player.x = 50;
+                player.y = groundY - player.height;
+                player.velX = 0;
+                player.velY = 0;
+                player.onGround = false;
+                player.jumpsRemaining = 2;
+                
+                // Respawn starts with brief invulnerability
+                setInvulnerable(INVULNERABILITY_FRAMES);
+            }
+
+            function gameOver(win) {
+                cancelAnimationFrame(animationFrameId);
+
+                gameState.isGameOver = true;
+                gameState.gameStarted = false;
+                messageOverlay.style.display = 'flex';
+                finalScoreDisplay.style.display = 'block';
+
+                if (win) {
+                    overlayTitle.textContent = "CONGRATS! VICTORY!";
+                    overlayMessage.textContent = `You completed all ${maxLevels} levels!`;
+                    overlayButton.textContent = "Play Again!";
+                } else {
+                    overlayTitle.textContent = "GAME OVER";
+                    overlayMessage.textContent = `You ran out of lives at Level ${gameState.currentLevel}.`;
+                    overlayButton.textContent = "Try Again!";
+                }
+                finalScoreDisplay.textContent = `Final Score: ${gameState.totalTryzubs}`;
+            }
+
+            function showTransitionScreen(level) {
+                gameState.isTransitioning = true;
+                messageOverlay.style.display = 'flex';
+                overlayTitle.textContent = `LEVEL ${level} COMPLETE!`;
+                overlayMessage.textContent = `Goal reached! Preparing Level ${level + 1}...`;
+                finalScoreDisplay.style.display = 'none';
+                overlayButton.style.display = 'none';
+
+                setTimeout(() => {
+                    messageOverlay.style.display = 'none';
+                    overlayButton.style.display = 'block';
+                    loadLevel(level + 1);
+                    gameState.isTransitioning = false;
+                }, 1500); 
+            }
+
+            // --- Input Handling ---
+            const keys = {};
+            document.addEventListener('keydown', (e) => {
+                if (e.code === 'KeyA' || e.code === 'KeyD' || e.code === 'Space') {
+                    keys[e.code] = true;
+                    e.preventDefault(); 
+                }
+            });
+            document.addEventListener('keyup', (e) => {
+                if (e.code === 'KeyA' || e.code === 'KeyD' || e.code === 'Space') {
+                    keys[e.code] = false;
+                }
+            });
+
+            overlayButton.addEventListener('click', () => {
+                if (!gameState.gameStarted || gameState.isGameOver) {
+                    resetGame();
+                }
+            });
+
+            // --- Game Loop Functions ---
+
+            function update() {
+                if (gameState.isGameOver || gameState.isTransitioning || !gameState.gameStarted) return;
+                
+                // Update Invulnerability Timer
+                if (gameState.isInvulnerable) {
+                    gameState.invulnerabilityTimer--;
+                    if (gameState.invulnerabilityTimer <= 0) {
+                        gameState.isInvulnerable = false;
+                    }
+                }
+
+                // Move background elements
+                for (const cloud of clouds) {
+                    cloud.x += cloud.speed;
+                    if (cloud.x > canvas.width + cloud.sizeX) { cloud.x = -cloud.sizeX; }
+                }
+                for (const bird of birds) {
+                    bird.x += bird.velX;
+                    bird.y += bird.amplitude * Math.sin(Date.now() * bird.frequency + bird.offset) * 0.05; 
+                    if (bird.x > canvas.width + 10) { bird.x = -10; }
+                }
+
+                // Player movement
+                player.velX = 0;
+                if (keys['KeyA']) player.velX = -playerSpeed;
+                if (keys['KeyD']) player.velX = playerSpeed;
+                if (keys['Space']) {
+                    if (player.onGround || player.jumpsRemaining > 0) {
+                        player.velY = jumpStrength;
+                        player.onGround = false;
+                        player.jumpsRemaining--;
+                        keys['Space'] = false; 
+                    }
+                }
+
+                player.velY += gravity;
+                player.x += player.velX;
+                player.y += player.velY;
+
+                if (player.x < 0) player.x = 0;
+                if (player.x + player.width > canvas.width) player.x = canvas.width - player.width;
+
+                player.onGround = false;
+
+                // Platform collision detection
+                for (const platform of gameState.platforms) {
+                    if (player.x < platform.x + platform.width &&
+                        player.x + player.width > platform.x &&
+                        player.y < platform.y + platform.height &&
+                        player.y + player.height > platform.y) {
+
+                        if (player.velY > 0 && player.y + player.height - player.velY <= platform.y) {
+                            player.y = platform.y - player.height;
+                            player.velY = 0;
+                            player.onGround = true;
+                            player.jumpsRemaining = 2; 
+                        }
+                        else if (player.velY < 0 && player.y <= platform.y + platform.height && player.y >= platform.y) {
+                            player.y = platform.y + platform.height;
+                            player.velY = 0;
+                        }
+                    }
+                }
+
+                // Fall off bottom of canvas
+                if (player.y > canvas.height) {
+                    respawn();
+                    return;
+                }
+
+                // --- Collectibles and Hazards Update & Collision ---
+                let tryzubCollectedThisFrame = false;
+
+                // Collectibles (Tryzub/Heart)
+                for (const item of gameState.collectibles) {
+                    if (!item.collected) {
+                        if (player.x < item.x + item.size &&
+                            player.x + player.width > item.x &&
+                            player.y < item.y + item.size &&
+                            player.y + player.height > item.y) {
+                            
+                            item.collected = true;
+
+                            if (item.type === 'tryzub') {
+                                gameState.totalTryzubs++;
+                                gameState.collectedInLevel++; 
+                                tryzubCollectedThisFrame = true;
+                            } else if (item.type === 'heart') {
+                                if (gameState.lives < maxLives) {
+                                    gameState.lives++;
+                                    livesInfo.textContent = `Lives: ${gameState.lives}`;
+                                }
+                            }
+                        }
+                    }
+                }
+                if (tryzubCollectedThisFrame) updateGameInfo();
+
+                // Hazards Update and Collision Check (Death)
+                for (const hazard of gameState.hazards) {
+                    if (hazard.type === 'moving_hazard') {
+                        hazard.y += hazard.velY;
+                        if (hazard.y <= hazard.startY - hazard.moveRange) { hazard.velY = 1; } 
+                        else if (hazard.y >= hazard.startY) { hazard.velY = -1; }
+                    } else if (hazard.type === 'patrol_hazard') {
+                        hazard.x += hazard.velX;
+                        // Enemy turns around if it hits its start point or range limit
+                        if (hazard.velX > 0 && hazard.x + hazard.width >= hazard.startX + hazard.moveRange) { hazard.velX *= -1; }
+                        if (hazard.velX < 0 && hazard.x <= hazard.startX) { hazard.velX *= -1; }
+                    }
+
+                    // Collision check - ONLY check if NOT invulnerable
+                    if (!gameState.isInvulnerable) {
+                        if (player.x < hazard.x + hazard.width &&
+                            player.x + player.width > hazard.x &&
+                            player.y + player.height > hazard.y &&
+                            player.y < hazard.y + hazard.height) {
+                            
+                            respawn();
+                            return; 
+                        }
+                    }
+                }
+                
+                // Level Completion Check (Check against GOAL)
+                if (gameState.collectedInLevel >= gameState.levelGoal && !gameState.isTransitioning) {
+                    showTransitionScreen(gameState.currentLevel);
+                }
+            }
+
+            function draw() {
+                const skyGradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+                skyGradient.addColorStop(0, '#87CEEB'); 
+                skyGradient.addColorStop(1, '#B0E0E6'); 
+                ctx.fillStyle = skyGradient;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                ctx.fillStyle = '#FFD700'; 
+                ctx.beginPath();
+                ctx.arc(canvas.width - 50, 50, 40, 0, Math.PI * 2);
+                ctx.fill();
+
+                for (const cloud of clouds) { drawCloud(cloud); }
+                for (const bird of birds) { drawBird(bird); }
+
+                // --- Drawing Houses with Doors and Windows ---
+                for (const house of houses) {
+                    // 1. Draw House Body
+                    ctx.fillStyle = house.color;
+                    ctx.fillRect(house.x, house.y, house.width, house.height);
+                    
+                    // 2. Draw Roof
+                    ctx.fillStyle = house.roofColor;
+                    ctx.beginPath();
+                    ctx.moveTo(house.x, house.y);
+                    ctx.lineTo(house.x + house.width / 2, house.y - house.height / 3);
+                    ctx.lineTo(house.x + house.width, house.y);
+                    ctx.closePath();
+                    ctx.fill();
+
+                    // 3. Draw Door
+                    const doorWidth = house.width / 4;
+                    const doorHeight = house.height / 3;
+                    const doorX = house.x + (house.width / 2) - (doorWidth / 2);
+                    const doorY = house.y + house.height - doorHeight;
+
+                    ctx.fillStyle = '#654321'; // Darker Brown
+                    ctx.fillRect(doorX, doorY, doorWidth, doorHeight);
+                    
+                    // 4. Draw Windows
+                    const windowSize = Math.min(house.width / 6, house.height / 6);
+                    const windowY = house.y + house.height / 4;
+                    const windowSpacing = house.width / 4;
+                    
+                    ctx.strokeStyle = '#333';
+                    ctx.lineWidth = 1;
+
+                    // Window 1 (Left)
+                    const w1X = house.x + windowSpacing / 2;
+                    ctx.fillStyle = '#ADD8E6'; // Light Blue/Cyan
+                    ctx.fillRect(w1X, windowY, windowSize, windowSize);
+                    ctx.strokeRect(w1X, windowY, windowSize, windowSize);
+                    
+                    // Window 2 (Right)
+                    const w2X = house.x + house.width - windowSpacing / 2 - windowSize;
+                    ctx.fillStyle = '#ADD8E6';
+                    ctx.fillRect(w2X, windowY, windowSize, windowSize);
+                    ctx.strokeRect(w2X, windowY, windowSize, windowSize);
+                }
+
+                for (const sunflower of sunflowers) { drawSunflower(sunflower.x, sunflower.y, sunflower.scale); }
+                for (const platform of gameState.platforms) {
+                    ctx.fillStyle = platform.color;
+                    ctx.fillRect(platform.x, platform.y, platform.width, platform.height);
+                }
+                for (const hazard of gameState.hazards) { drawHazard(hazard); }
+                for (const item of gameState.collectibles) {
+                    if (item.type === 'tryzub') { drawTryzub(item); } 
+                    else if (item.type === 'heart') { drawHeart(item); }
+                }
+                
+                drawPlayer();
+            }
+
+            function gameLoop() {
+                if (gameState.gameStarted && !gameState.isGameOver) {
+                    update();
+                    draw();
+                    animationFrameId = requestAnimationFrame(gameLoop);
+                } else {
+                    cancelAnimationFrame(animationFrameId);
+                }
+            }
+            
+            function initGame() {
+                overlayTitle.textContent = "Welcome to the Ukrainian Tryzub Adventure!";
+                overlayMessage.textContent = `Collect the required Tryzub to advance. ${maxLevels} levels to go!`;
+                finalScoreDisplay.style.display = 'none';
+                messageOverlay.style.display = 'flex';
+                
+                // Start with Level 1 data pre-loaded
+                loadLevel(1); 
+            }
+
+            window.onload = initGame;
+        })();
+    </script>
+</body>
+</html>
